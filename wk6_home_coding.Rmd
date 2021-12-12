@@ -1,0 +1,286 @@
+---
+title: "wk6_home_coding"
+author: "chris"
+date: "2021/12/12"
+output: html_document
+---
+
+```{r}
+library(sf)
+library(janitor)
+library(here)
+library(tidyverse)
+library(dplyr)
+library(tmap)
+library(spatstat)
+```
+
+```{r}
+brighton_map <- st_read(here::here('data',
+                      'Lower_Super_Output_Area_(LSOA)_IMD2019__(WGS84)-shp',
+                      '5878ebcf-f091-4bde-8864-aa547dd45afd2020330-1-8g4usn.8evuq.shp'))%>%
+  clean_names()%>%
+  dplyr::filter(str_detect(`lsoa11nm`,'^Brighton'))%>%
+  st_transform(.,27700)
+```
+
+
+```{r}
+brighton_pubs <- st_read(here::here('data',
+                                    'brighton_pubs.geojson'))%>%
+  clean_names()%>%
+  dplyr::filter(addr_city=='Brighton')%>%
+  st_transform(.,27700)
+
+
+```
+
+```{r}
+brighton_crime <- read.csv(here::here('data',
+                                      '2021-09-sussex-street.csv'))
+```
+
+```{r}
+brighton_antisocial <- brighton_crime%>%
+  clean_names()%>%
+  dplyr::filter(crime_type=='Anti-social behaviour')%>%
+  dplyr::filter(str_detect(`lsoa_name`,'^Brighton'))%>%
+  st_as_sf(., coords=c('longitude','latitude'),
+           crs=4326)%>%
+  st_transform(.,27700)
+  
+```
+
+```{r}
+tm_shape(brighton_map) +
+  tm_polygons(col = NA, alpha = 0.5) +
+tm_shape(brighton_antisocial)+
+  tm_dots(col = "blue")
+```
+```{r}
+brighton_antisocial <- distinct(brighton_anticocial)
+```
+
+
+
+```{r}
+#now set a window as the borough boundary
+window <- as.owin(brighton_map)
+plot(window)
+```
+```{r}
+#create a sp object
+brighton_antisocialsub<- brighton_antisocial %>%
+  as(., 'Spatial')
+#create a ppp object
+brighton_antisocialsub.ppp <- ppp(x=brighton_antisocialsub@coords[,1],
+                                  y=brighton_antisocialsub@coords[,2],
+                          window=window)
+```
+
+```{r}
+brighton_antisocialsub.ppp %>%
+  plot(.,pch=16,cex=0.5, 
+       main="pub in Brighton")
+```
+
+```{r}
+brighton_antisocialsub.ppp %>%
+  density(., sigma=500) %>%
+  plot()
+```
+```{r}
+brighton_antisocialsub.ppp %>%
+  density(., sigma=1000) %>%
+  plot()
+```
+```{r}
+#First plot the points
+plot(brighton_antisocialsub.ppp,
+     pch=16,
+     cex=0.5, 
+     main="Blue Plaques in Harrow")
+
+#now count the points in that fall in a 6 x 6
+#grid overlaid across the windowBluePlaquesSub.ppp2<-BluePlaquesSub.ppp %>%
+brighton_antisocialsub.ppp %>%
+  quadratcount(.,nx = 10, ny = 10)%>%
+    plot(., add=T, col="red")
+```
+```{r}
+#run the quadrat count
+Qcount <- brighton_antisocialsub.ppp %>%
+  quadratcount(.,nx = 10, ny = 10) %>%
+  as.data.frame() %>%
+  dplyr::count(Var1=Freq)%>%
+  dplyr::rename(Freqquadratcount=n)
+```
+
+```{r}
+sums <- Qcount %>%
+  #calculate the total blue plaques (Var * Freq)
+  mutate(total = Var1 * Freqquadratcount) %>%
+  dplyr::summarise(across(everything(), sum))%>%
+  dplyr::select(-Var1) 
+
+lambda<- Qcount%>%
+  #calculate lambda
+  mutate(total = Var1 * Freqquadratcount)%>%
+  dplyr::summarise(across(everything(), sum)) %>%
+  mutate(lambda=total/Freqquadratcount) %>%
+  dplyr::select(lambda)%>%
+  pull(lambda)
+```
+
+```{r}
+QCountTable <- Qcount %>%
+  mutate(Pr=((lambda^Var1)*exp(-lambda))/factorial(Var1))%>%
+  #now calculate the expected counts based on our total number of plaques
+  #and save them to the table
+  mutate(Expected= (round(Pr * sums$Freqquadratcount, 0)))
+
+#Compare the frequency distributions of the observed and expected point patterns
+plot(c(1,5),c(0,14), type="n",
+xlab="Number of Blue Plaques (Red=Observed,Blue=Expected)", 
+     ylab="Frequency of Occurances")
+points(QCountTable$Freqquadratcount, 
+       col="Red", 
+       type="o", 
+       lwd=3)
+points(QCountTable$Expected, col="Blue", 
+       type="o", 
+       lwd=3)
+```
+
+```{r}
+teststats <- quadrat.test(brighton_antisocialsub.ppp, nx = 10, ny = 10)
+
+plot(brighton_antisocialsub.ppp,pch=16,cex=0.5, main="pubs in Brighton")
+plot(teststats, add=T, col = "red")
+```
+
+```{r}
+K <- brighton_antisocialsub.ppp %>%
+  Kest(., correction="border") %>%
+  plot()
+```
+
+```{r}
+Kval <- as.data.frame(Kest(brighton_antisocialsub.ppp, correction = "border"))
+```
+
+# DBSCAN
+
+```{r}
+library(raster)
+library(fpc)
+```
+```{r}
+#first check the coordinate reference system of the Harrow spatial polygon:
+st_geometry(bright_map)
+```
+```{r}
+brighton_antisocialsubPoints <- brighton_antisocialsub%>%
+  coordinates(.)%>%
+  as.data.frame()
+
+#now run the dbscan analysis
+db <- brighton_antisocialsubPoints %>%
+  fpc::dbscan(.,eps = 500, MinPts = 4)
+
+#now plot the results
+plot(db, brighton_antisocialsubPoints, main = "DBSCAN Output", frame = F)
+plot(bright_map$geometry, add=T)
+```
+```{r}
+# used to find suitable eps value based on the knee in plot
+# k is no of nearest neighbours used, use min points
+library(dbscan)
+
+brighton_antisocialsubPoints%>%
+  dbscan::kNNdistplot(.,k=4)
+```
+```{r}
+library(ggplot2)
+db
+```
+
+```{r}
+db$cluster
+```
+
+```{r}
+brighton_antisocialsubPoints<- brighton_antisocialsubPoints %>%
+  mutate(dbcluster=db$cluster)
+```
+
+```{r}
+chulls <- brighton_antisocialsubPoints %>%
+  group_by(dbcluster) %>%
+  dplyr::mutate(hull = 1:n(),
+  hull = factor(hull, chull(coords.x1, coords.x2)))%>%
+  arrange(hull)
+
+#chulls2 <- ddply(BluePlaquesSubPoints, .(dbcluster), 
+              #  function(df) df[chull(df$coords.x1, df$coords.x2), ])
+```
+
+```{r}
+chulls <- chulls %>%
+  filter(dbcluster >=1)
+```
+
+
+```{r}
+dbplot <- ggplot(data=brighton_antisocialsubPoints, 
+                 aes(coords.x1,coords.x2, colour=dbcluster, fill=dbcluster)) 
+#add the points in
+dbplot <- dbplot + geom_point()
+#now the convex hulls
+dbplot <- dbplot + geom_polygon(data = chulls, 
+                                aes(coords.x1,coords.x2, group=dbcluster), 
+                                alpha = 0.5) 
+#now plot, setting the coordinates to scale correctly and as a black and white plot 
+#(just for the hell of it)...
+dbplot + theme_bw() + coord_equal()
+```
+
+# Moran
+```{r}
+WardData <- read_csv(here::here('data',
+                                'ward_profiles_excel_version.csv'), 
+                     na = c("NA", "n/a")) %>% 
+  clean_names()
+```
+```{r}
+bright_map_join <- bright_map %>% 
+  left_join(WardData, 
+            by = c("lsoa11cd" = "new_code"))%>%
+  dplyr::distinct(lsoa11cd, .keep_all = T)
+
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(bright_map_join) +
+  tm_polygons(col = NA, alpha = 0.5) +
+tm_shape(brighton_antisocialsub) +
+  tm_dots(col = "blue")
+```
+
+
+```{r}
+library(sf)
+points_sf_joined <- bright_map_join%>%
+  st_join(brighton_antisocialsub)%>%
+  add_count(ward_name)%>%
+  janitor::clean_names()%>%
+  #calculate area
+  mutate(area=st_area(.))%>%
+  #then density of the points per ward
+  mutate(density=n/area)%>%
+  #select density and some other variables 
+  dplyr::select(density, ward_name, lsoa11cd)
+```
+
+
